@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build an ARM64 Linux initramfs without Docker, root, or a guest OS install."""
+"""ホスト上でARM64 Linuxの最小起動環境を作る。
+
+公式配布物の取得 → C++ゲストのクロスコンパイル → initramfsの作成、の順に進む。
+initramfsはLinux起動時にメモリへ展開されるファイル群で、今回はルートFSにも使う。
+このPythonコードは準備だけを担当し、virtioの送受信はC++とLinux/QEMUが行う。
+"""
 import gzip
 import hashlib
 import os
@@ -9,14 +14,16 @@ import stat
 import subprocess
 import tarfile
 
+# 作業ディレクトリに依存せず、リポジトリ内にダウンロード物と成果物をまとめる。
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / ".cache"
 BUILD = ROOT / "build"
 ALPINE = "https://dl-cdn.alpinelinux.org/alpine/v3.23/main/aarch64/"
 KERNEL = "linux-virt-6.18.49-r0.apk"
 BUSYBOX = "busybox-static-1.37.0-r30.apk"
-# Alpine artifacts were downloaded over HTTPS and pinned by SHA-256.
-# Zig checksums come from https://ziglang.org/download/index.json (0.15.2).
+# Alpineは公式HTTPSから取得した内容をSHA-256で固定している。
+# Zigのハッシュは https://ziglang.org/download/index.json の0.15.2から取得した。
+# 毎回同じ配布物を使うための照合値。バージョン更新時はURLと一緒に見直す。
 HASHES = {
     KERNEL: "b5dcf3f5e4fd19a5413bdc858e746fec5ac5256e5db8cba94f808c9c6382b877",
     BUSYBOX: "44c9abdfb970f398fa72c8382fe2d8808eea16beaf82daf6ac708b92f1b8659e",
@@ -28,9 +35,11 @@ HASHES = {
 
 
 def download(url, expected):
+    """キャッシュを再利用し、ダウンロード済みの場合もハッシュを照合する。"""
     path = CACHE / "downloads" / url.rsplit("/", 1)[-1]
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
+        # 途中で中断されたファイルを、完成済みのキャッシュとして扱わないための別名。
         temporary = path.with_suffix(path.suffix + ".part")
         print(f"Downloading {url}", flush=True)
         subprocess.run(["curl", "-fL", "--retry", "2", "--connect-timeout", "15",
@@ -45,7 +54,9 @@ def download(url, expected):
 
 
 def apk_file(archive, name):
-    # APK v2 consists of concatenated gzip/tar sections.
+    """AlpineのAPKから必要な1ファイルだけをバイト列として読み出す。"""
+    # APK v2は複数のgzip/tar区画を連結している。ignore_zerosで区画をまたいで探す。
+    # ホストにパッケージをインストールしたり、そのインストールスクリプトを実行したりしない。
     with tarfile.open(archive, "r:gz", ignore_zeros=True) as package:
         member = package.extractfile(name)
         if member is None:
@@ -54,21 +65,32 @@ def apk_file(archive, name):
 
 
 def initramfs(entries):
-    """Encode Linux newc cpio directly; device nodes do not require host root."""
+    """Linuxが読めるnewc形式のcpioを生成し、gzipで圧縮する。
+
+    entriesは (パス, 種類と権限, 内容, デバイスmajor, デバイスminor) の並び。
+    デバイスノードもアーカイブ上の情報として書くため、ホストでのmknodやroot権限は不要。
+    """
     output = bytearray()
     for inode, (name, mode, data, major, minor) in enumerate(entries, 1):
         encoded = name.encode() + b"\0"
+        # newcの13フィールドを仕様順に並べ、各値を8桁の16進ASCIIにする。
+        # inode, mode, uid, gid, nlink, mtime, filesize, devmajor, devminor,
+        # rdevmajor, rdevminor, namesize（終端NUL込み）, check（newcでは0）。
         fields = (inode, mode, 0, 0, 1, 0, len(data), 0, 0, major, minor, len(encoded), 0)
         output += b"070701" + "".join(f"{value:08x}" for value in fields).encode()
         output += encoded
+        # ヘッダー＋ファイル名の後とデータの後を、それぞれ4バイト境界に揃える。
         output += b"\0" * (-len(output) % 4)
         output += data
         output += b"\0" * (-len(output) % 4)
+    # 作成時刻を固定し、同じ入力から同じ圧縮データを作れるようにする。
     return gzip.compress(output, mtime=0)
 
 
 def prepare():
+    """ホスト向けZigで、ゲスト向けLinuxバイナリと起動ファイルを用意する。"""
     BUILD.mkdir(exist_ok=True)
+    # 選んでいるのはコンパイラ自体の実行環境。生成するゲストは常にARM64 Linux。
     machine = {"arm64": "aarch64", "aarch64": "aarch64", "x86_64": "x86_64"}.get(platform.machine())
     system = {"Darwin": "macos", "Linux": "linux"}.get(platform.system())
     host = f"{machine}-{system}"
@@ -79,27 +101,34 @@ def prepare():
     zig_dir = CACHE / zig_name
     if not (zig_dir / "zig").exists():
         with tarfile.open(zig_archive) as archive:
+            # パストラバーサルなど、データ用展開として不適切なメンバーを拒否する。
             archive.extractall(CACHE, filter="data")
     kernel_package = download(ALPINE + KERNEL, HASHES[KERNEL])
     busybox_package = download(ALPINE + BUSYBOX, HASHES[BUSYBOX])
 
     guest = BUILD / "guest-linux-aarch64"
     sources = [ROOT / "src/guest.cpp", ROOT / "src/transport.hpp"]
+    # ソース更新時だけ再コンパイルする。macOSのネイティブバイナリとは別名で保存する。
     if not guest.exists() or any(p.stat().st_mtime > guest.stat().st_mtime for p in sources):
         print("Cross-compiling C++ guest for aarch64-linux-musl (first build may take a minute)...", flush=True)
         env = dict(os.environ, ZIG_GLOBAL_CACHE_DIR=str(CACHE / "zig-global"),
                    ZIG_LOCAL_CACHE_DIR=str(CACHE / "zig-local"))
+        # muslを使って静的リンクし、ゲストに共有ライブラリやローダーを置かずに実行する。
         subprocess.run([str(zig_dir / "zig"), "c++", "-target", "aarch64-linux-musl", "-static",
                         "-std=c++17", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-Isrc",
                         "src/guest.cpp", "-o", str(guest)], cwd=ROOT, env=env, check=True)
 
-    # virtio_console and virtio_pci are built into this pinned kernel.
+    # 最小ゲストには追加モジュールを入れないため、FEとPCI対応がカーネル組み込みか確認。
+    # DEVTMPFSは/dev/vportXpYなどのデバイスノードをカーネル側で提供する機能。
     config = apk_file(kernel_package, "boot/config-6.18.49-0-virt").decode()
     for setting in ("CONFIG_VIRTIO_CONSOLE=y", "CONFIG_VIRTIO_PCI=y", "CONFIG_DEVTMPFS=y"):
         if setting not in config.splitlines():
             raise RuntimeError(f"Kernel is missing {setting}")
     (BUILD / "vmlinuz-virt").write_bytes(apk_file(kernel_package, "boot/vmlinuz-virt"))
     entries = [(d, stat.S_IFDIR | 0o755, b"", 0, 0) for d in ("bin", "dev", "proc", "sys")]
+    # BusyBoxがsh/mount/lsなどを提供する。/initはカーネルがPID 1として起動する。
+    # /dev/consoleのmajor=5, minor=1はLinuxのコンソール。virtioポートとは別物。
+    # TRAILER!!!はcpioの終端。ここにディスクやネットワーク設定は含めない。
     entries += [
         ("bin/busybox", stat.S_IFREG | 0o755, apk_file(busybox_package, "bin/busybox.static"), 0, 0),
         ("bin/sh", stat.S_IFLNK | 0o777, b"busybox", 0, 0),
