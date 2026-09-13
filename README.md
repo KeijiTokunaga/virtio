@@ -1,6 +1,6 @@
 # C++で学ぶvirtio：ゲストのデバイスファイルからホストへ
 
-Linuxゲストが `/dev/virtio-ports/org.example.echo` を `open / write / read` し、ホストのC++プログラムが同じ内容を返すサンプルです。**ゲストとホストの通信プログラムはC++17**。Linux標準の **virtio-serial（virtio-consoleのマルチポート機能）** を使います。
+Linuxゲストが `/dev/virtio-ports/org.example.echo` を `open / write / read` し、ホストのC++プログラムが同じ内容を返すサンプルです。**通信・準備・起動・ゲスト初期化のプログラムはC++17**。Linux標準の **virtio-serial（virtio-consoleのマルチポート機能）** を使います。
 
 このMac（Apple Silicon）で、QEMU + **Hypervisor.framework / HVF** による実通信を検証済みです。CPUエミュレーションのTCGでも動作確認しています。独自カーネルドライバーの実装は含みません。
 
@@ -17,10 +17,10 @@ make demo DEMO_ARGS=--accel=hvf
 
 別の環境で実行する場合の前提:
 
-- macOSまたはLinux、C++17コンパイラ、Make、Python 3.12以降、curl、QEMU。
-- macOSでは `brew install qemu`、Debian/Ubuntuでは `sudo apt install build-essential qemu-system-arm curl python3` が導入例です。
-- Pythonはダウンロード・initramfs作成・プロセス起動用です。virtioのデータ送受信はC++が行います。
-- 初回はZig 0.15.2（Linux用クロスコンパイラ）、AlpineのLinuxカーネルとBusyBoxを公式HTTPS配布元から取得します。合計約90〜100MB。SHA-256を確認し、`.cache/` に保存します。
+- macOSまたはLinux、C++17コンパイラ、Make、curl、tar、SHA-256コマンド、QEMU。
+- macOSでは `brew install qemu`、Debian/Ubuntuでは `sudo apt install build-essential qemu-system-arm curl tar xz-utils` が導入例です。
+- PythonとBusyBoxは不要です。macOSでは `shasum`、Linuxでは `sha256sum` を使います。ダウンロード・展開はOSのcurl/tarへ任せます。
+- 初回はZig 0.15.2（Linux用クロスコンパイラ）、AlpineのLinuxカーネルを公式HTTPS配布元から取得します。合計約86〜100MB。SHA-256を確認し、`.cache/` に保存します。
 - 固定したAlpineパッケージが配布元から削除された場合は、URL・ハッシュ・カーネル設定ファイル名を合わせて更新する必要があります。
 
 CPU実行方式は切り替えられます。自動デモのゲストはどの場合もARM64です。
@@ -52,6 +52,30 @@ PASS: 5 real virtio round trips, including a second device open.
 ```
 
 完全なログは `build/logs/guest.log` と `build/logs/host.log` に残ります。次回実行時に上書きします。失敗時にもログを残し、起動したプロセスを終了します。
+
+## C++による準備・起動
+
+```text
+make demo
+  └─ build/demo（src/demo.cpp、ホスト向けC++）
+       ├─ curlでZigとLinuxカーネルを取得し、SHA-256を照合
+       ├─ tarで必要なファイルを取り出す
+       ├─ Zigでguest.cppとguest_init.cppをARM64 Linux向けに静的リンク
+       ├─ build/initramfs.cpioを作成
+       ├─ QEMUを起動し、ソケット作成を待つ
+       └─ build/hostを起動して結果・終了コードを確認
+
+QEMU内のLinux
+  └─ /init（src/guest_init.cpp）
+       ├─ devtmpfs・proc・sysfsをmount
+       ├─ キャラクターデバイスとvirtio_consoleドライバーを確認
+       ├─ /guest --self-test、別プロセスでの再オープンを実行
+       └─ reboot(RB_POWER_OFF)で電源断
+```
+
+準備だけ行う場合は `./build/demo --prepare-only`、VMを起動せず自己テストする場合は `./build/demo --self-test` を使います。いずれも `make` でビルドしてからリポジトリルートで実行します。
+
+デモは1つずつ実行してください。`build/` と `.cache/` は同じ作業ディレクトリで共有します。Ctrl-Cやタイムアウトの場合も、C++のプロセス管理が起動した子プロセスを終了します。
 
 ## 通信経路
 
@@ -96,9 +120,8 @@ stream.receive(reply);      // 内部で poll() と read()
 | `src/host.cpp` | QEMUのUnixソケットに接続し、受信内容を返す |
 | `src/transport.hpp` | fdのRAII管理、改行フレーム、部分読み書き、期限付きpoll |
 | `qemu-virtio.sh` | 既存VMのQEMU起動コマンドへvirtioポートを追加 |
-| `scripts/guest-init.sh` | 最小LinuxのPID 1。デバイス確認、テスト、電源断 |
-| `scripts/prepare_demo.py` | クロスコンパイル、カーネルとinitramfsの準備 |
-| `scripts/run_demo.py` | QEMUとC++ホストの起動、結果判定、後片付け |
+| `src/demo.cpp` | 配布物取得、クロスコンパイル、cpio作成、QEMU・ホストの起動と結果判定 |
+| `src/guest_init.cpp` | 最小LinuxのPID 1。ファイルシステムのmount、デバイス確認、ゲスト実行、電源断 |
 | `tests/test_transport.cpp` | VM不要の通信処理テスト |
 
 ## virtqueueの中で起きること
@@ -130,7 +153,9 @@ stream.receive(reply);      // 内部で poll() と read()
 | `virtserialport` | コントローラー上のポートとchardevを対応付ける |
 | `name=org.example.echo` | ゲスト側のポート名 |
 
-通常のLinuxではudevが `/dev/virtio-ports/` の名前付きリンクを作ります。自動デモはudevを省いた最小initramfsなので、sysfsで名前を照合して同じリンクを作成します。リンク先の `/dev/vportXpY` はカーネル/devtmpfsが提供する本物のデバイスです。通常ファイルや疑似端末で代用していません。
+通常のLinuxではudevが `/dev/virtio-ports/` の名前付きリンクを作ります。自動デモはudevを省いた最小initramfsなので、C++の `guest_init.cpp` がsysfsで名前を照合して同じリンクを作成します。リンク先の `/dev/vportXpY` はカーネル/devtmpfsが提供する本物のデバイスです。通常ファイルや疑似端末で代用していません。
+
+initramfsはC++で生成する非圧縮のnewc cpioです。`/init` と `/guest` は静的リンクしたLinux実行ファイルで、ゲストにシェルや共有ライブラリを置く必要はありません。
 
 固定したLinuxカーネルには `CONFIG_VIRTIO_CONSOLE=y` と `CONFIG_VIRTIO_PCI=y` が組み込まれており、デモではモジュール読み込みは不要です。
 
@@ -208,18 +233,19 @@ sudo strace -e trace=openat,read,write,poll ./guest Hello
 
 ## 検証結果
 
-2026-09-08、Apple Silicon macOS上で確認:
+旧構成は2026-09-08、C++版の準備・初期化処理は2026-09-13にApple Silicon macOS上で検証しています。
 
 | 項目 | 結果 |
 | --- | --- |
 | QEMU | Homebrewで11.1.1をインストール |
-| Linuxゲスト | Alpine Linux由来の6.18.49-0-virt / aarch64 |
-| C++通信処理の単体テスト | 7件成功 |
+| Linuxゲスト | Alpine Linux由来の6.18.50-0-virt / aarch64 |
+| C++通信処理の単体テスト | 7件 |
+| C++準備・起動処理の自己テスト | cpio構造、ハッシュ、空白付きパス、終了コード、タイムアウト |
 | QEMU + TCGの実通信 | 5往復成功 |
 | QEMU + HVFの実通信 | 5往復成功 |
 | ゲストデバイス | `/dev/vport0p1`、キャラクターデバイス、`virtio_console` |
 
-単体テストは分割・結合フレーム、日本語・空文字・最大サイズ、不正な送信フレーム、過大な受信フレーム、正常切断、途中切断、書き込みが進まない場合のタイムアウトを扱います。実通信では英語、日本語、空文字、4096バイト、デバイスを開き直した別プロセスからの要求を検証します。
+`make test` は通信処理に加えて、`build/demo --self-test` で準備・起動処理を検証します。通信の単体テストは分割・結合フレーム、日本語・空文字・最大サイズ、不正な送信フレーム、過大な受信フレーム、正常切断、途中切断、書き込みが進まない場合のタイムアウトを扱います。実通信では英語、日本語、空文字、4096バイト、デバイスを開き直した別プロセスからの要求を検証します。
 
 ## 困ったとき
 

@@ -21,7 +21,7 @@ umask 077
 # execでシェルをQEMUに置き換え、シグナルと終了コードを直接扱えるようにする。
 # "$@"で利用者が渡した起動引数を保ち、BEのコントローラー・ソケット・ポートを追加。
 # 手動実行用なのでwait=off。ゲストのC++クライアント実行前にホストサービスを接続する。
-# 自動デモのrun_demo.pyでは、起動順序を保証するためwait=onを使っている。
+# 自動デモのsrc/demo.cppでは、起動順序を保証するためwait=onを使っている。
 exec "$@" \
     -device virtio-serial-pci,id=samplevirtio \
     -chardev "socket,id=samplechannel,path=$VIRTIO_SOCKET,server=on,wait=off" \
