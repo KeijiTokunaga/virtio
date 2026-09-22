@@ -139,6 +139,43 @@
     margin-bottom: 0.25rem;
   }
 
+  .warning-box {
+    border-left: 4px solid var(--warning);
+    background-color: #fffbeb;
+    padding: 1.25rem 1.5rem;
+    margin: 1.5rem 0;
+    border-radius: 0 8px 8px 0;
+  }
+
+  .warning-title {
+    font-weight: bold;
+    color: #92400e;
+    font-size: 1rem;
+    margin-bottom: 0.35rem;
+  }
+
+  .pitfall-item {
+    margin-bottom: 1.25rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px dashed #fde68a;
+  }
+
+  .pitfall-item:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  .pitfall-bad {
+    color: #b91c1c;
+    font-weight: 600;
+  }
+
+  .pitfall-good {
+    color: #047857;
+    font-weight: 600;
+  }
+
   .file-badge {
     display: inline-block;
     background: #e0e7ff;
@@ -429,6 +466,53 @@ clang guest.c -o guest
       </tr>
     </tbody>
   </table>
+
+  <h2>初学者が陥りやすい7大誤解と注意点（Pitfalls & Misconceptions）</h2>
+  <p>virtio の学習や実装において、抽象化レイヤの境界や仮想化特有の挙動を見誤ると、重大なバグや設計ミスにつながります。特に初学者が勘違いしやすい重要ポイントを整理しました。</p>
+
+  <div class="warning-box">
+    <div class="pitfall-item">
+      <div class="warning-title">⚠️ 誤解 1: 「virtio はソケットやネットワーク通信の一種である」</div>
+      <p><span class="pitfall-bad">✕ よくある勘違い:</span> virtio を TCP や Unix ドメインソケットのような IPC プロトコルだと思っている。<br>
+      <span class="pitfall-good">◯ 正しい理解:</span> virtio の本質は <strong>「ゲストとホストが共有メモリ（DMAバッファ＋リングバッファ）を介してやり取りするデバイスI/O」</strong> です。ネットワークスタックは一切通りません。本サンプルのホスト側（<code>src/host.cpp</code>）が Unix ドメインソケットに接続しているのは、QEMU がキャラクタデバイスのバックエンド（<code>chardev socket</code>）としてソケットを公開しているためであり、virtio 仕様自体の要件ではありません。</p>
+    </div>
+
+    <div class="pitfall-item">
+      <div class="warning-title">⚠️ 誤解 2: 「アプリケーションが直接 virtqueue（リング）を操作する」</div>
+      <p><span class="pitfall-bad">✕ よくある勘違い:</span> C++アプリの中でディスクリプタを登録したり <code>virtqueue_kick</code> を呼ぶコードを書く必要がある。<br>
+      <span class="pitfall-good">◯ 正しい理解:</span> 通常、Virtqueue やリングバッファ、PCI割り込みを操作するのは <strong>Linuxカーネル内のドライバー（Frontend）</strong> の役目です。アプリケーションは通常のファイルと同じように <code>/dev/virtio-ports/...</code> に対して標準の <code>open()</code>, <code>read()</code>, <code>write()</code> を呼ぶだけで通信できます（DPDK などのユーザー空間ドライバーを使う特殊なケースを除く）。</p>
+    </div>
+
+    <div class="pitfall-item">
+      <div class="warning-title">⚠️ 誤解 3: 「write() が成功したらホストの処理や返信が完了している」</div>
+      <p><span class="pitfall-bad">✕ よくある勘違い:</span> <code>write()</code> が正常終了したのだから、ホスト側もデータを受け取って処理を終えているはずだ。<br>
+      <span class="pitfall-good">◯ 正しい理解:</span> ゲストの <code>write()</code> 成功は「カーネルの送信バッファ／送信virtqueueにデータが登録された」ことしか意味しません。ホスト側の処理完了や返信の受領は、ホストが Used Ring にバッファを返却し、ゲストOSへの完了通知（仮想割り込み）を経て <code>read()</code> で取得する <strong>非同期パイプライン</strong> です。</p>
+    </div>
+
+    <div class="pitfall-item">
+      <div class="warning-title">⚠️ 誤解 4: 「ホストとゲスト間でポインタ（メモリアドレス）を直接渡せる」</div>
+      <p><span class="pitfall-bad">✕ よくある勘違い:</span> ゲスト側で <code>void *buf = malloc(100);</code> して、そのポインタ値をホストに渡せばホストが読める。<br>
+      <span class="pitfall-good">◯ 正しい理解:</span> ゲスト仮想アドレス（GVA）とホスト仮想アドレス（HVA）は完全に独立したアドレス空間です。ディスクリプタに書き込むのは <strong>ゲスト物理アドレス（GPA）</strong>（または IOMMU/Stage-2 変換下の IOVA）です。ホスト側（QEMUやハイパーバイザー）は、Stage-2 ページテーブル変換を通じて GPA を自身の HVA にマップして初めてバッファへアクセスできます。ポインタ値をそのまま渡してもホスト側では不正メモリアクセスになります。</p>
+    </div>
+
+    <div class="pitfall-item">
+      <div class="warning-title">⚠️ 誤解 5: 「キック（Doorbell / 通知）はタダ（軽量）である」</div>
+      <p><span class="pitfall-bad">✕ よくある勘違い:</span> 1パケット送るたびに毎回 <code>kick</code> を呼んでもパフォーマンスに影響はない。<br>
+      <span class="pitfall-good">◯ 正しい理解:</span> ゲストからホストへのキックは、PCI/MMIO レジスタ書き込みに伴う <strong>VM-Exit（CPU仮想化トラップ）</strong> を引き起こします。VM-Exit は通常のメモリアクセスに比べて数千倍重く、CPU パイプラインをストールさせます。そのため Virtio 仕様には <code>VIRTIO_F_EVENT_IDX</code> や <code>VRING_AVAIL_F_NO_INTERRUPT</code> などの通知抑制フラグがあり、複数バッファをまとめて1回だけキックするバッチ処理が実機性能の鍵となります。</p>
+    </div>
+
+    <div class="pitfall-item">
+      <div class="warning-title">⚠️ 誤解 6: 「シリアルやキャラクタデバイスでもパケット（メッセージ）境界が保たれる」</div>
+      <p><span class="pitfall-bad">✕ よくある勘違い:</span> 10バイトの <code>write()</code> を呼んだら、相手側も必ず 1回の <code>read()</code> でちょうど10バイト受け取れる。<br>
+      <span class="pitfall-good">◯ 正しい理解:</span> <code>virtio-console</code> やキャラクターデバイスは <strong>バイトストリーム</strong> であり、メッセージ境界（パケットの区切り）を保存しません。ネットワークの TCP と同様に、途中で分割されたり複数メッセージが結合して届く可能性があります。そのため <code>src/transport.hpp</code> のように、アプリケーション層で「改行区切り」や「ヘッダ（長さ）＋本文」などのフレーミングプロトコルを実装する必要があります。</p>
+    </div>
+
+    <div class="pitfall-item">
+      <div class="warning-title">⚠️ 誤解 7: 「仮想マシンなのでマルチコアのメモリバリアは不要である」</div>
+      <p><span class="pitfall-bad">✕ よくある勘違い:</span> 仮想化環境のメモリなので、単一スレッドのように順番通りに読み書きされるはずだ。<br>
+      <span class="pitfall-good">◯ 正しい理解:</span> ゲスト vCPU とホスト CPU（QEMUスレッドなど）は、物理的に異なる CPU コア上で並行動作しています。特に ARM64（Apple Silicon や 車載SoC）はアウトオブオーダー実行を行う <strong>弱順序（Weak Ordering）</strong> CPU です。バッファを書いてから <code>idx</code> を進める Store-Store バリア（WMB）と、<code>idx</code> を検知してからバッファを読む Load-Load バリア（RMB）を正しく配置しないと、相手側で古いゴミデータを参照してしまうデータ競合が発生します。</p>
+    </div>
+  </div>
 
   <h2>発展テーマ（次のステップ）</h2>
   <ul>
