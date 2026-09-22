@@ -216,12 +216,13 @@ struct vring_used {
 #include &lt;stdint.h&gt;
 
 #define QUEUE_SIZE 8
+#define QUEUE_MASK (QUEUE_SIZE - 1) /* Virtio仕様: キューサイズは必ず2のべき乗 */
 #define SHM_NAME "/virtio_shm_demo"
 #define DATA_BUF_SIZE 256
 
 /* ディスクリプタ */
 struct vring_desc {
-    uint64_t offset; // 共有メモリ先頭からのデータバッファオフセット
+    uint64_t offset; // 共有メモリ先頭からのデータバッファオフセット (実機ではゲスト物理アドレスGPA)
     uint32_t len;
     uint16_t flags;
     uint16_t next;
@@ -230,7 +231,7 @@ struct vring_desc {
 /* Available Ring (ゲスト -> ホスト) */
 struct vring_avail {
     uint16_t flags;
-    uint16_t idx;
+    volatile uint16_t idx; // コンパイラのレジスタ最適化を抑止
     uint16_t ring[QUEUE_SIZE];
 };
 
@@ -242,7 +243,7 @@ struct vring_used_elem {
 
 struct vring_used {
     uint16_t flags;
-    uint16_t idx;
+    volatile uint16_t idx; // コンパイラのレジスタ最適化を抑止
     struct vring_used_elem ring[QUEUE_SIZE];
 };
 
@@ -282,18 +283,19 @@ int main() {
     while (1) {
         // Available Ringのidxが進んだかを監視 (実機ではDoorbellトラップ等で起床)
         if (vq->avail.idx != last_avail_idx) {
-            uint16_t desc_idx = vq->avail.ring[last_avail_idx % QUEUE_SIZE];
+            __sync_synchronize(); // Read Barrier: idx読込後にリングやディスクリプタを読み込む (ARM弱順序対策)
+            uint16_t desc_idx = vq->avail.ring[last_avail_idx & QUEUE_MASK];
             
             // ディスクリプタを参照してデータを取り出す
             char *msg = (char *)((uintptr_t)vq + vq->desc[desc_idx].offset);
             printf("[Host] Received via Desc[%u]: %s\n", desc_idx, msg);
 
-            // 処理完了を Used Ring に記録
-            uint16_t used_slot = vq->used.idx % QUEUE_SIZE;
+            // 処理完了を Used Ring に記録 (ビットマスクで計算)
+            uint16_t used_slot = vq->used.idx & QUEUE_MASK;
             vq->used.ring[used_slot].id = desc_idx;
-            vq->used.ring[used_slot].len = vq->desc[desc_idx].len;
+            vq->used.ring[used_slot].len = 0; // 送信バッファ返却のため書込長は0 (Virtio仕様準拠)
             
-            __sync_synchronize(); // メモリバリア
+            __sync_synchronize(); // Write Barrier: used.ring書込を反映した後にused.idxを進める
             vq->used.idx++;       // ホスト側進行カウンタをインクリメント
 
             last_avail_idx++;
@@ -341,11 +343,11 @@ int main() {
     vq->desc[slot].len = strlen(target) + 1;
     vq->desc[slot].flags = 0; // 単一バッファ（チェインなし）
 
-    // 3. Available Ring に追加
-    uint16_t avail_slot = vq->avail.idx % QUEUE_SIZE;
+    // 3. Available Ring に追加 (ビットマスクでインデックス計算)
+    uint16_t avail_slot = vq->avail.idx & QUEUE_MASK;
     vq->avail.ring[avail_slot] = slot;
     
-    __sync_synchronize(); // メモリバリア
+    __sync_synchronize(); // Write Barrier: バッファ/Desc/Ring書込を反映した後にidxを進める
     vq->avail.idx++;      // ゲスト側進行カウンタをインクリメント
     printf("[Guest] Submitted buffer (slot %u). Waiting for Host to process...\n", slot);
 
@@ -353,9 +355,10 @@ int main() {
     while (vq->used.idx == last_used_idx) {
         usleep(1000);
     }
+    __sync_synchronize(); // Read Barrier: used.idx読込後にused.ringを読み出す (ARM弱順序対策)
 
     printf("[Guest] Host marked Desc[%u] as USED! I/O Complete.\n",
-           vq->used.ring[last_used_idx % QUEUE_SIZE].id);
+           vq->used.ring[last_used_idx & QUEUE_MASK].id);
 
     munmap(vq, sizeof(struct shared_virtqueue_layout));
     close(fd);
@@ -374,8 +377,17 @@ clang guest.c -o guest
 ./guest</code></pre>
 
   <div class="box">
-    <div class="box-title">ここがポイント</div>
-    両プロセスは <code>vq-&gt;avail.idx</code> と <code>vq-&gt;used.idx</code> という単調増加カウンタのみを監視・更新しています。ロックを介さず、メモリバリア（<code>__sync_synchronize()</code>）とインデックスの更新順序だけで非同期通信が成立しています。
+    <div class="box-title">ここがポイント（Virtio仕様と実機設計の要点）</div>
+    <ul>
+      <li><strong>単調増加カウンタとビットマスク（<code>&amp; (QUEUE_SIZE - 1)</code>）:</strong>
+        <code>idx</code> は <code>uint16_t</code>（0〜65535）として単調増加し、オーバーフロー時に 65535 → 0 へ自然に周回（ラップアラウンド）します。
+        キューサイズが <strong>2のべき乗</strong>（例: 8）であるため、<code>idx &amp; (QUEUE_SIZE - 1)</code> を用いることで、ラップアラウンド境界を跨いでもスロット番号が不連続にならず安全に巡回できます。また、CPUの除算命令（<code>div</code>）を回避し、1サイクルのビットマスクで高速処理されます。</li>
+      <li><strong>メモリバリアの対称性（Read / Write Barrier）:</strong>
+        ARM64（Apple Siliconや車載SoC）はアウトオブオーダー実行を行う <strong>メモリ弱順序（Weak Ordering）</strong> です。
+        書き込み側（WMB）だけでなく、読み込み側（RMB）でも「<code>idx</code> の更新を確認してからリングやバッファを参照する」ための Load-Load バリア（Read Barrier）が不可欠です。現代のC11/C++11では <code>std::atomic_thread_fence(memory_order_acquire / release)</code> や <code>stlr</code>/<code>ldar</code> 命令がこれに対応します。</li>
+      <li><strong>キャッシュライン偽共有（False Sharing）の防止:</strong>
+        実機Virtio仕様では、ゲストが書く <code>avail</code> とホストが書く <code>used</code> は物理的に別々のページやキャッシュライン（ARM64: 64〜128バイト）に分離して配置され、両コア間のキャッシュ無効化競合を防ぎます。</li>
+    </ul>
   </div>
 
   <h2>Step 3: Linuxカーネルコードとの対応関係</h2>

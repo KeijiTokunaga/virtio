@@ -112,6 +112,15 @@ stream.receive(reply);      // 内部で poll() と read()
 
 `fstat()` と `S_ISCHR()` でキャラクターデバイスであることを確認します。ただし、それだけではvirtioだと断定できません。デモではsysfsのポート名とドライバーも表示し、`virtio_console` に接続されたデバイスであることを確認します。
 
+## 学習資料・アーキテクチャ図解
+
+本リポジトリには、virtioの基礎理論やハイパーバイザー環境を視覚的に学ぶための単体完結型HTML資料（`doc/`）が含まれています。ブラウザで開いて閲覧できます。
+
+| ドキュメント | 内容 |
+| --- | --- |
+| [`doc/gemini-code-1789270013452.html`](doc/gemini-code-1789270013452.html) | **Virtio & Hypervisor アーキテクチャ図解**<br>QNX（車載実機）vs Mac/QEMU環境のスタック対比と、Virtqueue 3大構造（Descriptor Table, Available Ring, Used Ring）のデータフロー |
+| [`doc/gemini-code-1789266236885.html`](doc/gemini-code-1789266236885.html) | **Virtqueue 実装・学習ハンドブック**<br>POSIX共有メモリ（shm）を使ったC言語による最小Virtqueueシミュレータの実装と、Linuxカーネル（`virtio_ring.c`）の対応解説 |
+
 ## コードを読む順番
 
 | ファイル | 役割 |

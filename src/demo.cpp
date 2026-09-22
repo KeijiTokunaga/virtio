@@ -74,8 +74,8 @@ public:
         if (done_) return;
         ::kill(-pid_, SIGTERM);
         for (int i = 0; !finished() && i < 50; ++i) std::this_thread::sleep_for(100ms);
-        ::kill(-pid_, SIGKILL);
-        if (!done_) {
+        if (!finished()) {
+            ::kill(-pid_, SIGKILL);
             while (::waitpid(pid_, &status_, 0) < 0 && errno == EINTR) {}
         }
     }
