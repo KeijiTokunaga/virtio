@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Virtio & Hypervisor アーキテクチャ図解</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card-bg: #1e293b;
+    --text: #f8fafc;
+    --text-muted: #94a3b8;
+    --border: #334155;
+  }
+  body {
+    margin: 0;
+    padding: 2rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2.5rem;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem 2rem;
+    width: 100%;
+    max-width: 900px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+  }
+  h2 {
+    margin-top: 0;
+    font-size: 1.25rem;
+    color: #38bdf8;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  p {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-bottom: 1.5rem;
+    line-height: 1.5;
+  }
+  svg {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+</style>
+</head>
+<body>
+
+<!-- 図1: アーキテクチャ対比 -->
+<div class="card">
+  <h2>図1: QNX環境 vs Mac(QEMU)環境のスタック対比</h2>
+  <p>Linuxゲストから見ると、下位層がQNXのvdevであってもQEMUであっても、標準Virtqueue仕様で抽象化されているため全く同じインターフェースとして扱えます。</p>
+
+  <svg viewBox="0 0 850 480" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- 背景グリッド装飾 -->
+    <rect width="850" height="480" rx="8" fill="#131d31"/>
+    
+    <!-- 境界ライン -->
+    <line x1="425" y1="30" x2="425" y2="450" stroke="#334155" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+    <!-- ================= 左側: QNX実機 ================= -->
+    <text x="212" y="55" fill="#f8fafc" font-size="16" font-weight="bold" text-anchor="middle">車載実機: QNX Hypervisor</text>
+
+    <!-- Linux Guest -->
+    <rect x="50" y="80" width="325" height="80" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="1.5"/>
+    <text x="212" y="115" fill="#f8fafc" font-size="14" font-weight="bold" text-anchor="middle">ゲストOS (Linux)</text>
+    <text x="212" y="138" fill="#94a3b8" font-size="12" text-anchor="middle">Linux標準 virtio ドライバ (Frontend)</text>
+
+    <!-- Virtqueue Channel -->
+    <rect x="80" y="180" width="265" height="35" rx="17.5" fill="#0f766e" stroke="#14b8a6" stroke-width="1.5"/>
+    <text x="212" y="202" fill="#ccfbf1" font-size="12" font-weight="bold" text-anchor="middle">Virtqueue (共有メモリ通信)</text>
+
+    <!-- 矢印 -->
+    <path d="M 212 160 L 212 180" stroke="#14b8a6" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M 212 235 L 212 215" stroke="#14b8a6" stroke-width="2"/>
+
+    <!-- QNX Layer -->
+    <rect x="50" y="235" width="325" height="135" rx="6" fill="#1e293b" stroke="#818cf8" stroke-width="1.5"/>
+    
+    <!-- QNX vdev -->
+    <rect x="70" y="250" width="285" height="45" rx="4" fill="#312e81" stroke="#6366f1" stroke-width="1"/>
+    <text x="212" y="277" fill="#e0e7ff" font-size="13" font-weight="bold" text-anchor="middle">QNX 仮想デバイス (vdev / Backend)</text>
+
+    <!-- QNX Kernel / Hypervisor -->
+    <text x="212" y="325" fill="#c7d2fe" font-size="14" font-weight="bold" text-anchor="middle">QNX Neutrino RTOS</text>
+    <text x="212" y="348" fill="#818cf8" font-size="12" text-anchor="middle">(Type-1 ハイパーバイザー機能内包)</text>
+
+    <!-- Hardware -->
+    <rect x="50" y="390" width="325" height="50" rx="6" fill="#090d16" stroke="#475569" stroke-width="1.5"/>
+    <text x="212" y="420" fill="#94a3b8" font-size="13" text-anchor="middle">車載SoC (ARM Cortex-A / 物理ハード)</text>
+
+
+    <!-- ================= 右側: Mac/QEMU ================= -->
+    <text x="637" y="55" fill="#f8fafc" font-size="16" font-weight="bold" text-anchor="middle">学習環境: macOS + QEMU</text>
+
+    <!-- Linux Guest (全く同じ) -->
+    <rect x="475" y="80" width="325" height="80" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="1.5"/>
+    <text x="637" y="115" fill="#f8fafc" font-size="14" font-weight="bold" text-anchor="middle">ゲストOS (Linux)</text>
+    <text x="637" y="138" fill="#38bdf8" font-size="12" text-anchor="middle">★ Linux標準 virtio ドライバ (全く同一)</text>
+
+    <!-- Virtqueue Channel -->
+    <rect x="505" y="180" width="265" height="35" rx="17.5" fill="#0f766e" stroke="#14b8a6" stroke-width="1.5"/>
+    <text x="637" y="202" fill="#ccfbf1" font-size="12" font-weight="bold" text-anchor="middle">★ Virtqueue (全く同一の仕様)</text>
+
+    <!-- 矢印 -->
+    <path d="M 637 160 L 637 180" stroke="#14b8a6" stroke-width="2"/>
+    <path d="M 637 235 L 637 215" stroke="#14b8a6" stroke-width="2"/>
+
+    <!-- QEMU User Process -->
+    <rect x="475" y="235" width="325" height="60" rx="6" fill="#1e293b" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="637" y="260" fill="#fef3c7" font-size="13" font-weight="bold" text-anchor="middle">QEMU (ユーザー空間プロセス)</text>
+    <text x="637" y="280" fill="#fcd34d" font-size="11" text-anchor="middle">virtio バックエンド処理 (または vhost)</text>
+
+    <!-- macOS HVF Layer -->
+    <rect x="475" y="310" width="325" height="60" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="1.5"/>
+    <text x="637" y="335" fill="#f8fafc" font-size="13" font-weight="bold" text-anchor="middle">macOS (XNU Kernel + HVF)</text>
+    <text x="637" y="355" fill="#94a3b8" font-size="11" text-anchor="middle">Hypervisor.framework によるCPU仮想化支援</text>
+
+    <!-- Hardware -->
+    <rect x="475" y="390" width="325" height="50" rx="6" fill="#090d16" stroke="#475569" stroke-width="1.5"/>
+    <text x="637" y="420" fill="#94a3b8" font-size="13" text-anchor="middle">Apple Silicon (M1/M2/M3/M4 コア)</text>
+  </svg>
+</div>
+
+<!-- 図2: Virtqueue 3大構造とデータフロー -->
+<div class="card">
+  <h2>図2: Virtqueue（Split Ring）3大構造の連携</h2>
+  <p>ゲストOSとホスト（QEMU/QNX）が共有メモリを介してロックフリーに非同期I/Oを行うシーケンスです。</p>
+
+  <svg viewBox="0 0 850 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#38bdf8"/>
+      </marker>
+      <marker id="arrow-green" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#34d399"/>
+      </marker>
+    </defs>
+
+    <rect width="850" height="500" rx="8" fill="#131d31"/>
+
+    <!-- ================= 共有メモリ枠 ================= -->
+    <rect x="40" y="40" width="770" height="420" rx="8" fill="#1e293b" stroke="#475569" stroke-width="1.5" stroke-dasharray="6 6"/>
+    <text x="60" y="68" fill="#94a3b8" font-size="12" font-weight="bold">共有メモリ領域 (Shared Memory)</text>
+
+    <!-- 1. Descriptor Table -->
+    <rect x="70" y="100" width="710" height="95" rx="6" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5"/>
+    <text x="90" y="125" fill="#38bdf8" font-size="13" font-weight="bold">① Descriptor Table（実データ位置の目録）</text>
+    
+    <!-- Table items -->
+    <rect x="90" y="140" width="130" height="40" rx="4" fill="#1e293b" stroke="#334155"/>
+    <text x="155" y="160" fill="#f8fafc" font-size="11" text-anchor="middle">Desc[0]</text>
+    <text x="155" y="173" fill="#64748b" font-size="9" text-anchor="middle">addr: 0x1000, len: 64</text>
+
+    <rect x="230" y="140" width="130" height="40" rx="4" fill="#1e293b" stroke="#334155"/>
+    <text x="295" y="160" fill="#f8fafc" font-size="11" text-anchor="middle">Desc[1]</text>
+    <text x="295" y="173" fill="#64748b" font-size="9" text-anchor="middle">addr: 0x1040, len: 512</text>
+
+    <rect x="370" y="140" width="130" height="40" rx="4" fill="#1e293b" stroke="#334155"/>
+    <text x="435" y="165" fill="#64748b" font-size="11" text-anchor="middle">Desc[2] (空き)</text>
+
+    <text x="530" y="165" fill="#64748b" font-size="12">...</text>
+
+    <!-- 2. Available Ring (ゲスト -> ホスト) -->
+    <rect x="70" y="225" width="340" height="180" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5"/>
+    <text x="90" y="250" fill="#34d399" font-size="13" font-weight="bold">② Available Ring (ゲスト書込専用)</text>
+    <text x="90" y="270" fill="#94a3b8" font-size="11">「この番号の処理をお願い！」という依頼箱</text>
+
+    <rect x="90" y="290" width="300" height="35" rx="4" fill="#064e3b" stroke="#059669"/>
+    <text x="105" y="312" fill="#a7f3d0" font-size="12">idx = 1 (次に積む位置)</text>
+
+    <rect x="90" y="335" width="65" height="50" rx="4" fill="#1e293b" stroke="#34d399"/>
+    <text x="122" y="358" fill="#34d399" font-size="11" text-anchor="middle">ring[0]</text>
+    <text x="122" y="375" fill="#f8fafc" font-size="13" font-weight="bold" text-anchor="middle">ID: 0</text>
+
+    <rect x="165" y="335" width="65" height="50" rx="4" fill="#1e293b" stroke="#334155"/>
+    <text x="197" y="365" fill="#64748b" font-size="11" text-anchor="middle">ring[1]</text>
+
+    <!-- 3. Used Ring (ホスト -> ゲスト) -->
+    <rect x="440" y="225" width="340" height="180" rx="6" fill="#0f172a" stroke="#f43f5e" stroke-width="1.5"/>
+    <text x="460" y="250" fill="#f43f5e" font-size="13" font-weight="bold">③ Used Ring (ホスト書込専用)</text>
+    <text x="460" y="270" fill="#94a3b8" font-size="11">「この番号の処理が終わったよ！」という完了箱</text>
+
+    <rect x="460" y="290" width="300" height="35" rx="4" fill="#4c0519" stroke="#e11d48"/>
+    <text x="475" y="312" fill="#fecdd3" font-size="12">idx = 1 (次に返す位置)</text>
+
+    <rect x="460" y="335" width="85" height="50" rx="4" fill="#1e293b" stroke="#f43f5e"/>
+    <text x="502" y="355" fill="#f43f5e" font-size="10" text-anchor="middle">used_elem[0]</text>
+    <text x="502" y="373" fill="#f8fafc" font-size="12" font-weight="bold" text-anchor="middle">id:0, len:64</text>
+
+    <rect x="555" y="335" width="85" height="50" rx="4" fill="#1e293b" stroke="#334155"/>
+    <text x="597" y="365" fill="#64748b" font-size="11" text-anchor="middle">used_elem[1]</text>
+
+    <!-- 動作フローの矢印と注記 -->
+    <!-- Step A: ゲストがDesc作成 -->
+    <path d="M 240 225 C 240 205, 155 205, 155 185" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="3 3" marker-end="url(#arrow)"/>
+    <text x="180" y="210" fill="#38bdf8" font-size="10">A. バッファ登録</text>
+
+    <!-- Step B: ホストが参照 -->
+    <path d="M 390 350 C 420 350, 420 185, 230 185" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="3 3"/>
+    <text x="365" y="195" fill="#fbbf24" font-size="10">B. IDを取り出してDescを参照</text>
+
+    <!-- Step C: ホストがUsedに返す -->
+    <path d="M 460 360 L 410 360" stroke="#f43f5e" stroke-width="1.5" stroke-dasharray="3 3"/>
+    <text x="415" y="380" fill="#f43f5e" font-size="10">C. 完了報告</text>
+  </svg>
+</div>
+
+</body>
+</html>
